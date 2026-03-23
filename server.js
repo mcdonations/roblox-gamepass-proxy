@@ -12,6 +12,7 @@ app.use((req, res, next) => {
 
 // ════════════════════════════════════════════════════════
 // 🎮 GET /api/gamepasses/:userId
+// Récupère les gamepasses CRÉÉS par le joueur (pour les afficher sur son stand)
 // ════════════════════════════════════════════════════════
 
 app.get("/api/gamepasses/:userId", async (req, res) => {
@@ -21,7 +22,7 @@ app.get("/api/gamepasses/:userId", async (req, res) => {
     return res.status(400).json({ success: false, error: "UserID invalide" });
   }
 
-  console.log(`📡 Récupération des gamepasses pour UserID: ${userId}`);
+  console.log(`📡 Récupération des gamepasses créés par UserID: ${userId}`);
 
   try {
     const gamepasses = [];
@@ -29,12 +30,13 @@ app.get("/api/gamepasses/:userId", async (req, res) => {
     let hasMore = true;
 
     while (hasMore) {
-      const url = `https://catalog.roblox.com/v1/search/items?category=GamePass&creatorType=User&creatorTargetId=${userId}&limit=30${cursor ? "&cursor=" + cursor : ""}`;
+      // ✅ Bon endpoint : gamepasses créés par l'utilisateur
+      const url = `https://games.roblox.com/v1/users/${userId}/game-passes?limit=100&sortOrder=Asc${cursor ? "&cursor=" + cursor : ""}`;
 
       const response = await fetch(url, {
         headers: {
           "Accept": "application/json",
-          "User-Agent": "RobloxProxy/1.0"
+          "User-Agent": "Mozilla/5.0"
         }
       });
 
@@ -50,39 +52,28 @@ app.get("/api/gamepasses/:userId", async (req, res) => {
       }
 
       for (const item of data.data) {
+        // Récupérer l'icône via thumbnails
+        let iconImageId = 0;
         try {
-          const detailRes = await fetch(`https://apis.roblox.com/game-passes/v1/game-passes/${item.id}/product-info`, {
+          const thumbRes = await fetch(`https://thumbnails.roblox.com/v1/game-passes?gamePassIds=${item.id}&size=150x150&format=Png`, {
             headers: { "Accept": "application/json" }
           });
+          const thumbData = await thumbRes.json();
+          if (thumbData.data && thumbData.data[0] && thumbData.data[0].imageUrl) {
+            const imageUrl = thumbData.data[0].imageUrl;
+            const match = imageUrl.match(/\/(\d+)\//);
+            if (match) iconImageId = parseInt(match[1]);
+          }
+        } catch (_) {}
 
-          if (!detailRes.ok) continue;
+        gamepasses.push({
+          id: item.id,
+          name: item.name,
+          price: item.price || 0,
+          iconImageId: iconImageId
+        });
 
-          const detail = await detailRes.json();
-
-          // Récupérer l'icône
-          let iconImageId = 0;
-          try {
-            const thumbRes = await fetch(`https://thumbnails.roblox.com/v1/game-passes?gamePassIds=${item.id}&size=150x150&format=Png`, {
-              headers: { "Accept": "application/json" }
-            });
-            const thumbData = await thumbRes.json();
-            if (thumbData.data && thumbData.data[0]) {
-              const imageUrl = thumbData.data[0].imageUrl;
-              const match = imageUrl.match(/id=(\d+)/);
-              if (match) iconImageId = parseInt(match[1]);
-            }
-          } catch (_) {}
-
-          gamepasses.push({
-            id: item.id,
-            name: detail.Name || item.name,
-            price: detail.PriceInRobux || 0,
-            iconImageId: iconImageId
-          });
-
-        } catch (err) {
-          console.warn(`⚠️ Erreur détail gamepass ${item.id}:`, err.message);
-        }
+        console.log(`✅ Gamepass: ${item.name} - ${item.price} R$`);
       }
 
       if (data.nextPageCursor) {
