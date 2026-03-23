@@ -11,6 +11,44 @@ app.use((req, res, next) => {
 });
 
 // ════════════════════════════════════════════════════════
+// 🔍 DEBUG - Teste tous les endpoints Roblox possibles
+// GET /api/debug/:userId
+// ════════════════════════════════════════════════════════
+
+app.get("/api/debug/:userId", async (req, res) => {
+  const userId = req.params.userId;
+  const results = {};
+
+  const endpoints = {
+    "games_gamepasses":     `https://games.roblox.com/v1/users/${userId}/game-passes?limit=10&sortOrder=Asc`,
+    "inventory_v1":         `https://inventory.roblox.com/v1/users/${userId}/assets/collectibles?assetType=GamePass&limit=10`,
+    "inventory_v2":         `https://inventory.roblox.com/v2/users/${userId}/inventory?assetTypes=GamePass&limit=10`,
+    "catalog_search":       `https://catalog.roblox.com/v1/search/items?category=GamePass&creatorType=User&creatorTargetId=${userId}&limit=10`,
+    "develop_gamepasses":   `https://develop.roblox.com/v1/user/game-passes?userId=${userId}&limit=10`,
+  };
+
+  for (const [name, url] of Object.entries(endpoints)) {
+    try {
+      const r = await fetch(url, {
+        headers: {
+          "Accept": "application/json",
+          "User-Agent": "Mozilla/5.0"
+        }
+      });
+      const text = await r.text();
+      results[name] = {
+        status: r.status,
+        body: text.substring(0, 500)
+      };
+    } catch (e) {
+      results[name] = { error: e.message };
+    }
+  }
+
+  res.json(results);
+});
+
+// ════════════════════════════════════════════════════════
 // 🎮 GET /api/gamepasses/:userId
 // ════════════════════════════════════════════════════════
 
@@ -29,12 +67,12 @@ app.get("/api/gamepasses/:userId", async (req, res) => {
     let hasMore = true;
 
     while (hasMore) {
-      const url = `https://www.roblox.com/users/inventory/list-json?userId=${userId}&assetTypeId=34&pageSize=100${cursor ? "&cursor=" + cursor : ""}`;
+      const url = `https://games.roblox.com/v1/users/${userId}/game-passes?limit=100&sortOrder=Asc${cursor ? "&cursor=" + cursor : ""}`;
 
       const response = await fetch(url, {
         headers: {
           "Accept": "application/json",
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+          "User-Agent": "Mozilla/5.0"
         }
       });
 
@@ -45,43 +83,39 @@ app.get("/api/gamepasses/:userId", async (req, res) => {
       }
 
       const data = await response.json();
-      console.log(`📦 Data reçue:`, JSON.stringify(data).substring(0, 200));
+      const items = data.data || [];
 
-      // Format de la réponse inventory
-      const items = data.Data?.Items || data.items || data.data || [];
-
-      if (!items || items.length === 0) {
+      if (items.length === 0) {
         hasMore = false;
         break;
       }
 
       for (const item of items) {
-        const assetId = item.Item?.AssetId || item.assetId || item.id;
-        const name = item.Item?.Name || item.name || "Unknown";
-        const price = item.Product?.PriceInRobux || item.price || 0;
-        const imageId = item.Thumbnail?.Url?.match(/id=(\d+)/)?.[1] || 0;
+        let iconImageId = 0;
+        try {
+          const thumbRes = await fetch(`https://thumbnails.roblox.com/v1/game-passes?gamePassIds=${item.id}&size=150x150&format=Png`);
+          const thumbData = await thumbRes.json();
+          if (thumbData.data?.[0]?.imageUrl) {
+            const match = thumbData.data[0].imageUrl.match(/\/(\d+)\//);
+            if (match) iconImageId = parseInt(match[1]);
+          }
+        } catch (_) {}
 
-        if (assetId) {
-          gamepasses.push({
-            id: assetId,
-            name: name,
-            price: price,
-            iconImageId: parseInt(imageId) || 0
-          });
-          console.log(`✅ Gamepass: ${name} - ${price} R$`);
-        }
+        gamepasses.push({
+          id: item.id,
+          name: item.name,
+          price: item.price || 0,
+          iconImageId: iconImageId
+        });
+
+        console.log(`✅ Gamepass: ${item.name} - ${item.price} R$`);
       }
 
-      // Pagination
-      const nextCursor = data.Data?.NextPageCursor || data.nextPageCursor;
-      if (nextCursor) {
-        cursor = nextCursor;
-      } else {
-        hasMore = false;
-      }
+      cursor = data.nextPageCursor || "";
+      hasMore = !!data.nextPageCursor;
     }
 
-    console.log(`✅ ${gamepasses.length} gamepasses récupérés pour ${userId}`);
+    console.log(`✅ ${gamepasses.length} gamepasses récupérés`);
 
     return res.json({
       success: true,
@@ -92,31 +126,7 @@ app.get("/api/gamepasses/:userId", async (req, res) => {
 
   } catch (err) {
     console.error("❌ Erreur:", err.message);
-    return res.status(500).json({
-      success: false,
-      error: err.message
-    });
-  }
-});
-
-// ════════════════════════════════════════════════════════
-// 🔍 GET /api/debug/:userId  -- Pour tester et voir la réponse brute
-// ════════════════════════════════════════════════════════
-
-app.get("/api/debug/:userId", async (req, res) => {
-  const userId = req.params.userId;
-  try {
-    const url = `https://www.roblox.com/users/inventory/list-json?userId=${userId}&assetTypeId=34&pageSize=10`;
-    const response = await fetch(url, {
-      headers: {
-        "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-      }
-    });
-    const text = await response.text();
-    res.json({ status: response.status, body: text.substring(0, 2000) });
-  } catch (err) {
-    res.json({ error: err.message });
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -138,6 +148,6 @@ app.get("/health", (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Serveur démarré sur le port ${PORT}`);
-  console.log(`🌐 Route: GET /api/gamepasses/:userId`);
-  console.log(`🔍 Debug: GET /api/debug/:userId`);
+  console.log(`🌐 /api/gamepasses/:userId`);
+  console.log(`🔍 /api/debug/:userId`);
 });
